@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="theme-color" content="#4a90e2">
 <title>ピロロ病院 予約システム</title>
+<!-- 外部サービス読み込み -->
+<script src="config.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
   html, body { height: 100%; }
@@ -817,6 +820,110 @@
 
 <div class="toast" id="toast"></div>
 
+<!-- ===== Firebase 初期化（ESM） ===== -->
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
+import { getFirestore, collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot }
+  from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
+
+const cfg = window.PIRORO_CONFIG && window.PIRORO_CONFIG.firebase;
+if (!cfg || !cfg.apiKey || cfg.apiKey.indexOf("ここに") === 0) {
+  console.warn("[piroro] Firebase 設定が未入力です。config.js を編集してください。");
+}
+
+let _cache = [];
+let _cacheReady = false;
+let _pendingInitCbs = [];
+
+try {
+  const app = initializeApp(cfg);
+  const db = getFirestore(app);
+  const col = collection(db, "reservations");
+
+  // リアルタイム購読
+  onSnapshot(col, snap => {
+    _cache = snap.docs.map(d => d.data());
+    _cacheReady = true;
+    if (typeof window.onReservationsUpdate === "function") {
+      window.onReservationsUpdate();
+    }
+    // 初回データ到着時のコールバック
+    while (_pendingInitCbs.length) {
+      const cb = _pendingInitCbs.shift();
+      try { cb(); } catch(e) { console.error(e); }
+    }
+  }, err => {
+    console.error("[piroro] Firestore 購読エラー:", err);
+    _cacheReady = true; // エラーでも UI は動かす
+    while (_pendingInitCbs.length) {
+      const cb = _pendingInitCbs.shift();
+      try { cb(); } catch(e) {}
+    }
+  });
+
+  // 予約の書き込みAPI
+  window.FB = {
+    ready: (cb) => { if (_cacheReady) cb(); else _pendingInitCbs.push(cb); },
+    list: () => _cache.slice(),
+    saveNew: async (r) => { await setDoc(doc(col, r.id), r); },
+    update: async (id, patch) => { await updateDoc(doc(col, id), patch); },
+    remove: async (id) => { await deleteDoc(doc(col, id)); }
+  };
+} catch (e) {
+  console.error("[piroro] Firebase 初期化失敗:", e);
+  // フォールバック: Firebase が使えない場合は localStorage を使う
+  const STORAGE_KEY = "piroro_reservations";
+  const readLS = () => { try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]"); } catch(e){ return []; } };
+  _cache = readLS();
+  _cacheReady = true;
+  window.FB = {
+    ready: (cb) => cb(),
+    list: () => _cache.slice(),
+    saveNew: async (r) => { _cache.push(r); localStorage.setItem(STORAGE_KEY, JSON.stringify(_cache)); if (window.onReservationsUpdate) window.onReservationsUpdate(); },
+    update: async (id, patch) => { const i = _cache.findIndex(x=>x.id===id); if (i>=0){ Object.assign(_cache[i], patch); localStorage.setItem(STORAGE_KEY, JSON.stringify(_cache)); if (window.onReservationsUpdate) window.onReservationsUpdate(); } },
+    remove: async (id) => { _cache = _cache.filter(x=>x.id!==id); localStorage.setItem(STORAGE_KEY, JSON.stringify(_cache)); if (window.onReservationsUpdate) window.onReservationsUpdate(); }
+  };
+}
+
+// EmailJS 初期化
+try {
+  if (window.emailjs && window.PIRORO_CONFIG && window.PIRORO_CONFIG.emailjs) {
+    emailjs.init({ publicKey: window.PIRORO_CONFIG.emailjs.publicKey });
+  }
+} catch(e) { console.warn("[piroro] EmailJS 初期化エラー:", e); }
+
+// 予約完了メール送信
+window.sendReservationEmail = async function(r) {
+  if (!r.email) return;
+  if (!window.emailjs || !window.PIRORO_CONFIG || !window.PIRORO_CONFIG.emailjs) return;
+  const cfg = window.PIRORO_CONFIG.emailjs;
+  if (!cfg.serviceId || cfg.serviceId.indexOf("service_x") === 0) {
+    console.warn("[piroro] EmailJS 設定未入力のためメール送信をスキップ");
+    return;
+  }
+  const weekdays = ["日","月","火","水","木","金","土"];
+  const d = new Date(r.date);
+  const dateStr = `${d.getFullYear()}年${d.getMonth()+1}月${d.getDate()}日(${weekdays[d.getDay()]})`;
+  try {
+    await emailjs.send(cfg.serviceId, cfg.templateId, {
+      to_email: r.email,
+      to_name: r.name,
+      hospital_name: (window.PIRORO_CONFIG.hospital && window.PIRORO_CONFIG.hospital.name) || "ピロロ病院",
+      reservation_id: r.id,
+      dept_name: r.deptName,
+      doctor_name: r.doctorName,
+      date: dateStr,
+      time: r.time,
+      visit: r.visit === "first" ? "初診" : "再診",
+      symptom: r.symptom || "（未入力）"
+    });
+    console.log("[piroro] メール送信成功:", r.email);
+  } catch(e) {
+    console.error("[piroro] メール送信失敗:", e);
+  }
+};
+</script>
+
 <script>
 // ------ データ定義 ------
 const departments = [
@@ -1182,19 +1289,13 @@ function fillConfirm() {
 }
 
 // ------ 予約完了 ------
-const STORAGE_KEY = 'piroro_reservations';
+// データはFirebase(window.FB)経由で扱う。キャッシュは同期的に読めます。
 
 function loadReservations() {
-  try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
-  } catch(e) { return []; }
+  return (window.FB ? window.FB.list() : []);
 }
 
-function saveReservations(list) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
-}
-
-function completeReservation() {
+async function completeReservation() {
   const d = state.date;
   const no = `PR-${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}-${String(Math.floor(Math.random()*9000)+1000)}`;
 
@@ -1217,12 +1318,24 @@ function completeReservation() {
     status: 'pending'
   };
 
-  const list = loadReservations();
-  list.push(reservation);
-  saveReservations(list);
+  // ボタン二重押し防止のため確認画面のボタンを無効化
+  const confirmBtns = document.querySelectorAll('#screen-confirm .btn');
+  confirmBtns.forEach(b => b.disabled = true);
+  toast('予約を送信しています…');
 
-  document.getElementById('reserveNo').textContent = no;
-  showScreen('done');
+  try {
+    await window.FB.saveNew(reservation);
+    // メール送信（失敗してもOK）
+    if (reservation.email && window.sendReservationEmail) {
+      window.sendReservationEmail(reservation);
+    }
+    document.getElementById('reserveNo').textContent = no;
+    showScreen('done');
+  } catch(e) {
+    console.error(e);
+    alert('予約の保存に失敗しました。通信状態をご確認の上、再度お試しください。');
+    confirmBtns.forEach(b => b.disabled = false);
+  }
 }
 
 // ------ 予約一覧 ------
@@ -1273,15 +1386,15 @@ function renderLookup() {
   }).join('');
 }
 
-function cancelReservation(id) {
+async function cancelReservation(id) {
   if (!confirm('この予約をキャンセルしますか？')) return;
-  const list = loadReservations();
-  const r = list.find(x => x.id === id);
-  if (r) {
-    r.status = 'cancelled';
-    saveReservations(list);
+  try {
+    await window.FB.update(id, { status: 'cancelled' });
     renderLookup();
     toast('予約をキャンセルしました');
+  } catch(e) {
+    console.error(e);
+    alert('キャンセルに失敗しました。通信状態をご確認ください。');
   }
 }
 
@@ -1295,10 +1408,15 @@ function enterWaitingMode(id) {
   waitingCurrentId = id;
   waitingLastStatus = null;
   showScreen('waiting', false);
-  renderWaiting();
+  // Firebase の初回データ到着後にレンダリング。以降は onReservationsUpdate が呼ぶ
+  if (window.FB) {
+    window.FB.ready(() => renderWaiting());
+  } else {
+    renderWaiting();
+  }
+  // 保険として定期再描画（バックアップ用、60秒ごと）
   if (waitingPollId) clearInterval(waitingPollId);
-  waitingPollId = setInterval(renderWaiting, 3000);
-  // ドキュメント可視時はタイトル通知も行う
+  waitingPollId = setInterval(renderWaiting, 60000);
 }
 
 function leaveWaitingMode() {
@@ -1428,7 +1546,7 @@ function renderWaiting() {
   `;
 
   if (me.status !== 'completed' && me.status !== 'cancelled') {
-    html += `<div class="refresh-hint">※ 3秒ごとに自動更新しています</div>`;
+    html += `<div class="refresh-hint">※ リアルタイムで自動更新しています</div>`;
   }
 
   html += `<div style="margin-top:14px;"><button class="btn secondary" onclick="goHomeFromWaiting()">ホームへ戻る</button></div>`;
@@ -1596,9 +1714,27 @@ function toast(msg) {
   toastTimer = setTimeout(() => t.classList.remove('show'), 2000);
 }
 
-// 初期化
-if (!checkUrlParams()) {
-  showScreen('home', false);
+// Firestore更新が来たら待機中画面と一覧画面を再描画
+window.onReservationsUpdate = function() {
+  if (currentScreen === 'waiting') {
+    renderWaiting();
+  } else if (currentScreen === 'lookup') {
+    renderLookup();
+  }
+};
+
+// 初期化（Firebase の準備完了を待って画面を出す）
+function bootstrap() {
+  if (!checkUrlParams()) {
+    showScreen('home', false);
+  }
+}
+if (window.FB && typeof window.FB.ready === 'function') {
+  // すぐに home を出してUIを止めない。waitingの場合はFB.readyで再描画される
+  bootstrap();
+} else {
+  // FBがまだ初期化されていない可能性。少し待ってから
+  setTimeout(bootstrap, 300);
 }
 </script>
 </body>

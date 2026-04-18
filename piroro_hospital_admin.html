@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ピロロ病院 管理者ダッシュボード</title>
+<script src="config.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -745,6 +746,79 @@
   </div>
 </div>
 
+<!-- ===== Firebase 初期化（ESM） ===== -->
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
+import { getFirestore, collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot, writeBatch, getDocs }
+  from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
+
+const cfg = window.PIRORO_CONFIG && window.PIRORO_CONFIG.firebase;
+if (!cfg || !cfg.apiKey || cfg.apiKey.indexOf("ここに") === 0) {
+  console.warn("[piroro-admin] Firebase 設定が未入力です。config.js を編集してください。");
+}
+
+let _cache = [];
+let _cacheReady = false;
+let _pendingInitCbs = [];
+
+try {
+  const app = initializeApp(cfg);
+  const db = getFirestore(app);
+  const col = collection(db, "reservations");
+
+  onSnapshot(col, snap => {
+    _cache = snap.docs.map(d => d.data());
+    _cacheReady = true;
+    if (typeof window.onReservationsUpdate === "function") {
+      window.onReservationsUpdate();
+    }
+    while (_pendingInitCbs.length) {
+      const cb = _pendingInitCbs.shift();
+      try { cb(); } catch(e) { console.error(e); }
+    }
+  }, err => {
+    console.error("[piroro-admin] Firestore 購読エラー:", err);
+    _cacheReady = true;
+    while (_pendingInitCbs.length) {
+      const cb = _pendingInitCbs.shift();
+      try { cb(); } catch(e) {}
+    }
+  });
+
+  window.FB = {
+    ready: (cb) => { if (_cacheReady) cb(); else _pendingInitCbs.push(cb); },
+    list: () => _cache.slice(),
+    saveNew: async (r) => { await setDoc(doc(col, r.id), r); },
+    update: async (id, patch) => { await updateDoc(doc(col, id), patch); },
+    upsert: async (r) => { await setDoc(doc(col, r.id), r); },
+    remove: async (id) => { await deleteDoc(doc(col, id)); },
+    removeAll: async () => {
+      const all = await getDocs(col);
+      const batch = writeBatch(db);
+      all.forEach(d => batch.delete(d.ref));
+      await batch.commit();
+    }
+  };
+} catch (e) {
+  console.error("[piroro-admin] Firebase 初期化失敗:", e);
+  // フォールバック: localStorage
+  const STORAGE_KEY = "piroro_reservations";
+  const readLS = () => { try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]"); } catch(e){ return []; } };
+  const writeLS = () => localStorage.setItem(STORAGE_KEY, JSON.stringify(_cache));
+  _cache = readLS();
+  _cacheReady = true;
+  window.FB = {
+    ready: (cb) => cb(),
+    list: () => _cache.slice(),
+    saveNew: async (r) => { _cache.push(r); writeLS(); if (window.onReservationsUpdate) window.onReservationsUpdate(); },
+    update: async (id, patch) => { const i = _cache.findIndex(x=>x.id===id); if (i>=0){ Object.assign(_cache[i], patch); writeLS(); if (window.onReservationsUpdate) window.onReservationsUpdate(); } },
+    upsert: async (r) => { const i = _cache.findIndex(x=>x.id===r.id); if (i>=0) _cache[i] = r; else _cache.push(r); writeLS(); if (window.onReservationsUpdate) window.onReservationsUpdate(); },
+    remove: async (id) => { _cache = _cache.filter(x=>x.id!==id); writeLS(); if (window.onReservationsUpdate) window.onReservationsUpdate(); },
+    removeAll: async () => { _cache = []; writeLS(); if (window.onReservationsUpdate) window.onReservationsUpdate(); }
+  };
+}
+</script>
+
 <script>
 const STORAGE_KEY = 'piroro_reservations';
 const departments = [
@@ -795,12 +869,31 @@ if (localStorage.getItem('piroro_admin_logged_in') === '1') {
 }
 
 // ------ データ ------
+// 同期で読む（window.FB キャッシュ経由）
 function loadReservations() {
-  try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]'); }
-  catch(e) { return []; }
+  return (window.FB ? window.FB.list() : []);
 }
+// 書き込みは Firebase へ（差分を計算して個別に保存）
+// 非同期だが、オプティミスティックに即時再描画も行うのでUIは即反映される
 function saveReservations(list) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
+  if (!window.FB) return Promise.resolve();
+  const cache = window.FB.list();
+  const cacheMap = new Map(cache.map(r => [r.id, r]));
+  const listMap = new Map(list.map(r => [r.id, r]));
+  const ops = [];
+  for (const r of list) {
+    const old = cacheMap.get(r.id);
+    if (!old || JSON.stringify(old) !== JSON.stringify(r)) {
+      ops.push(window.FB.upsert(r));
+    }
+  }
+  for (const r of cache) {
+    if (!listMap.has(r.id)) ops.push(window.FB.remove(r.id));
+  }
+  return Promise.all(ops).catch(e => {
+    console.error('[piroro-admin] 保存失敗:', e);
+    alert('保存に失敗しました。通信状態をご確認ください。');
+  });
 }
 
 // ------ 画面切り替え ------
@@ -841,12 +934,15 @@ function init() {
   adminCalYear = now.getFullYear();
   adminCalMonth = now.getMonth();
 
-  // 他タブで localStorage が変わったときも自動再読込
-  window.addEventListener('storage', (e) => {
-    if (e.key === STORAGE_KEY) render();
-  });
+  // Firebase のリアルタイム更新で自動再描画
+  window.onReservationsUpdate = function() { render(); };
 
-  render();
+  // 初回は FB のデータ到着後にレンダリング
+  if (window.FB && typeof window.FB.ready === 'function') {
+    window.FB.ready(() => render());
+  } else {
+    render();
+  }
 }
 
 // ------ レンダリング ------
@@ -1347,12 +1443,18 @@ function seedData() {
   alert('サンプルデータを追加しました');
 }
 
-function clearData() {
-  if (!confirm('全ての予約データを削除します。よろしいですか？\n※この操作は元に戻せません')) return;
+async function clearData() {
+  if (!confirm('全ての予約データを削除します。よろしいですか？\n※この操作は元に戻せません（Firebase上のデータも削除されます）')) return;
   if (!confirm('本当に削除してもよろしいですか？')) return;
-  localStorage.removeItem(STORAGE_KEY);
-  render();
-  alert('データを削除しました');
+  try {
+    if (window.FB && window.FB.removeAll) {
+      await window.FB.removeAll();
+    }
+    alert('データを削除しました');
+  } catch(e) {
+    console.error(e);
+    alert('削除に失敗しました: ' + e.message);
+  }
 }
 
 // 初期化
