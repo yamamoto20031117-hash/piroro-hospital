@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#4a90e2">
+<title>ピロロ病院 受付</title>
+<script src="config.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.10/html5-qrcode.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Meiryo", sans-serif;
+    background: linear-gradient(135deg, #4a90e2 0%, #3fc28a 100%);
+    color: #2c3e50;
+    min-height: 100vh;
+    overflow: hidden;
+  }
+  .app {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 20px;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+  .header {
+    color: #fff;
+    text-align: center;
+    padding: 16px 0 24px;
+    flex-shrink: 0;
+  }
+  .header h1 {
+    font-size: 34px;
+    font-weight: 700;
+    margin-bottom: 8px;
+  }
+  .header p {
+    font-size: 18px;
+    opacity: 0.95;
+  }
+  .main-card {
+    background: #fff;
+    border-radius: 20px;
+    padding: 30px;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+    flex: 1;
+    overflow: auto;
+    display: flex;
+    flex-direction: column;
+  }
+  /* スキャン画面 */
+  #scanner-area {
+    width: 100%;
+    max-width: 500px;
+    margin: 0 auto;
+  }
+  #reader {
+    width: 100%;
+    border: 3px solid #e8eef4;
+    border-radius: 16px;
+    overflow: hidden;
+    background: #000;
+  }
+  #reader video { width: 100%; display: block; }
+  .scanner-hint {
+    text-align: center;
+    font-size: 20px;
+    color: #2c3e50;
+    margin-top: 20px;
+    line-height: 1.6;
+  }
+  .scanner-hint strong { color: #4a90e2; }
+
+  /* 手入力エリア */
+  .manual-input {
+    margin-top: 24px;
+    padding: 20px;
+    background: #f7fafd;
+    border-radius: 14px;
+  }
+  .manual-input h3 {
+    font-size: 16px;
+    color: #6b7b8c;
+    margin-bottom: 10px;
+    text-align: center;
+  }
+  .manual-row {
+    display: flex;
+    gap: 8px;
+  }
+  .manual-row input {
+    flex: 1;
+    padding: 16px;
+    font-size: 18px;
+    border: 2px solid #d5dfe8;
+    border-radius: 12px;
+    font-family: ui-monospace, monospace;
+    letter-spacing: 1px;
+  }
+  .manual-row input:focus {
+    outline: none;
+    border-color: #4a90e2;
+  }
+  .manual-row button {
+    padding: 0 24px;
+    border: none;
+    background: #4a90e2;
+    color: #fff;
+    border-radius: 12px;
+    font-size: 18px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .manual-row button:active { transform: scale(0.97); }
+
+  /* 結果画面 */
+  #result-area { display: none; text-align: center; padding: 20px 0; }
+  #result-area.active { display: flex; flex-direction: column; justify-content: center; height: 100%; }
+  .big-check {
+    width: 140px; height: 140px;
+    border-radius: 50%;
+    background: #3fc28a;
+    color: #fff;
+    font-size: 90px;
+    font-weight: 700;
+    line-height: 140px;
+    margin: 20px auto;
+    animation: popIn 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  }
+  .big-error {
+    width: 140px; height: 140px;
+    border-radius: 50%;
+    background: #f05552;
+    color: #fff;
+    font-size: 90px;
+    font-weight: 700;
+    line-height: 140px;
+    margin: 20px auto;
+    animation: popIn 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  }
+  @keyframes popIn {
+    0% { transform: scale(0); opacity: 0; }
+    100% { transform: scale(1); opacity: 1; }
+  }
+  #result-message {
+    font-size: 32px;
+    font-weight: 700;
+    color: #2c3e50;
+    margin: 16px 0;
+  }
+  #result-detail {
+    font-size: 18px;
+    color: #6b7b8c;
+    margin-bottom: 24px;
+    line-height: 1.6;
+  }
+  #result-waiting-number {
+    font-size: 20px;
+    color: #6b7b8c;
+    margin: 16px 0;
+  }
+  #result-waiting-number strong {
+    display: block;
+    font-size: 90px;
+    color: #4a90e2;
+    font-weight: 800;
+    line-height: 1.1;
+    margin-top: 8px;
+  }
+  .result-back {
+    margin-top: 30px;
+    padding: 20px 40px;
+    border: none;
+    background: #4a90e2;
+    color: #fff;
+    font-size: 22px;
+    font-weight: 700;
+    border-radius: 14px;
+    cursor: pointer;
+    max-width: 400px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+  .result-back:active { transform: scale(0.98); }
+
+  /* トースト */
+  .toast {
+    position: fixed;
+    bottom: 40px; left: 50%;
+    transform: translateX(-50%) translateY(100px);
+    background: #2c3e50;
+    color: #fff;
+    padding: 14px 28px;
+    border-radius: 30px;
+    font-size: 16px;
+    opacity: 0;
+    transition: all 0.3s;
+    z-index: 9999;
+  }
+  .toast.show {
+    transform: translateX(-50%) translateY(0);
+    opacity: 1;
+  }
+
+  .status-info {
+    text-align: center;
+    font-size: 13px;
+    color: #fff;
+    margin-top: auto;
+    padding: 12px 0 0;
+    opacity: 0.8;
+  }
+
+  @media (orientation: portrait) {
+    .header h1 { font-size: 28px; }
+    #result-message { font-size: 26px; }
+    #result-waiting-number strong { font-size: 70px; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="header">
+    <h1>🏥 ピロロ病院 受付</h1>
+    <p>QRコードをカメラにかざしてください</p>
+  </div>
+
+  <div class="main-card">
+    <div id="scanner-area">
+      <div id="reader"></div>
+      <div class="scanner-hint">
+        スマホの<strong>予約完了QR</strong>または<br>
+        紙の<strong>整理券QR</strong>をかざしてください
+      </div>
+      <div class="manual-input">
+        <h3>📝 QRが読めない場合は予約番号を直接入力</h3>
+        <div class="manual-row">
+          <input type="text" id="manualId" placeholder="PR-20260423-1234" autocomplete="off">
+          <button onclick="manualCheckin()">受付</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="result-area">
+      <div id="result-icon" class="big-check">✓</div>
+      <div id="result-message">受付完了しました</div>
+      <div id="result-detail">-</div>
+      <div id="result-waiting-number">
+        あなたの待ち番号
+        <strong id="result-number">-</strong>
+      </div>
+      <button class="result-back" onclick="backToScan()">続けて受付する</button>
+    </div>
+  </div>
+
+  <div class="status-info" id="statusInfo">カメラ待機中…</div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<!-- Firebase 初期化 -->
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
+import { getFirestore, collection, doc, updateDoc, onSnapshot }
+  from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
+
+const cfg = window.PIRORO_CONFIG && window.PIRORO_CONFIG.firebase;
+if (!cfg || !cfg.apiKey || cfg.apiKey.indexOf("ここに") === 0) {
+  alert("Firebase 設定が未入力です。config.js を編集してください。");
+} else {
+  try {
+    const app = initializeApp(cfg);
+    const db  = getFirestore(app);
+    const col = collection(db, "reservations");
+
+    let _cache = [];
+    let _ready = false;
+    const _pending = [];
+
+    onSnapshot(col, (snap) => {
+      _cache = snap.docs.map(d => d.data());
+      if (!_ready) {
+        _ready = true;
+        _pending.splice(0).forEach(cb => cb());
+      }
+      if (typeof window.onReservationsUpdate === 'function') window.onReservationsUpdate();
+    }, (err) => console.error("[checkin] Firestore snapshot error:", err));
+
+    window.FB = {
+      ready: (cb) => { if (_ready) cb(); else _pending.push(cb); },
+      list:  () => _cache.slice(),
+      findById: (id) => _cache.find(r => r.id === id),
+      update: async (id, patch) => {
+        await updateDoc(doc(col, id), patch);
+      }
+    };
+  } catch(e) {
+    console.error("[checkin] Firebase init failed:", e);
+    alert("Firebase 初期化エラー: " + e.message);
+  }
+}
+</script>
+
+<script>
+// ==================== UI制御 ====================
+const $ = (id) => document.getElementById(id);
+function toast(msg) {
+  const t = $('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toast._tid);
+  toast._tid = setTimeout(() => t.classList.remove('show'), 2500);
+}
+
+// ==================== QRスキャナー ====================
+let html5QrCode = null;
+let isScanning = false;
+let lastScannedId = null;
+let lastScannedTime = 0;
+
+async function startScanner() {
+  try {
+    if (!window.Html5Qrcode) {
+      $('statusInfo').textContent = 'QRライブラリ読み込みエラー';
+      return;
+    }
+    html5QrCode = new Html5Qrcode("reader");
+    const config = { fps: 10, qrbox: { width: 260, height: 260 } };
+    await html5QrCode.start(
+      { facingMode: "environment" },
+      config,
+      onScanSuccess,
+      () => {}
+    );
+    isScanning = true;
+    $('statusInfo').textContent = '📷 カメラ起動中';
+  } catch(e) {
+    console.warn('カメラ起動失敗:', e);
+    $('statusInfo').textContent = '⚠️ カメラが使用できません。手入力をご利用ください。';
+  }
+}
+
+async function stopScanner() {
+  if (html5QrCode && isScanning) {
+    try { await html5QrCode.stop(); } catch(_) {}
+    isScanning = false;
+  }
+}
+
+function onScanSuccess(decodedText) {
+  // 連続読み取り防止（3秒間同じコードは無視）
+  const now = Date.now();
+  if (decodedText === lastScannedId && (now - lastScannedTime) < 3000) return;
+  lastScannedId = decodedText;
+  lastScannedTime = now;
+  processCheckin(decodedText.trim());
+}
+
+// ==================== 受付処理 ====================
+async function manualCheckin() {
+  const id = $('manualId').value.trim();
+  if (!id) { toast('予約番号を入力してください'); return; }
+  await processCheckin(id);
+  $('manualId').value = '';
+}
+
+async function processCheckin(id) {
+  if (!window.FB) { toast('システム初期化中です。少しお待ちください'); return; }
+  await stopScanner();
+
+  const r = window.FB.findById(id);
+  if (!r) {
+    showError('予約が見つかりません', `入力されたコード:\n${id}`);
+    return;
+  }
+  if (r.status === 'cancelled') {
+    showError('この予約はキャンセルされています', `予約番号: ${id}`);
+    return;
+  }
+  if (r.status === 'completed') {
+    showError('この予約は完了済みです', `予約番号: ${id}`);
+    return;
+  }
+  if (r.status === 'checked_in' || r.status === 'called' || r.status === 'in_consultation') {
+    // 既に受付済み。待ち番号だけ表示する
+    const no = computeWaitingNumber(r);
+    showSuccess(r, no, '※既に受付済みです');
+    return;
+  }
+
+  // 受付済みに変更
+  try {
+    await window.FB.update(id, { status: 'checked_in', checkedInAt: new Date().toISOString() });
+    // snapshotが反映されるのを少し待つ
+    await new Promise(res => setTimeout(res, 400));
+    const r2 = window.FB.findById(id) || { ...r, status: 'checked_in' };
+    const no = computeWaitingNumber(r2);
+    showSuccess(r2, no);
+  } catch(e) {
+    console.error(e);
+    showError('受付処理に失敗しました', e.message || '通信状態をご確認ください');
+  }
+}
+
+function computeWaitingNumber(me) {
+  // 今日の受付済み予約を時刻順に並べ、この人の順位を返す
+  const today = new Date().toISOString().slice(0,10);
+  const list = window.FB.list()
+    .filter(r => r.date === today)
+    .filter(r => ['checked_in','called','in_consultation'].includes(r.status))
+    .sort((a,b) => (a.checkedInAt || '').localeCompare(b.checkedInAt || ''));
+  const idx = list.findIndex(r => r.id === me.id);
+  return idx >= 0 ? (idx + 1) : list.length + 1;
+}
+
+function showSuccess(r, waitingNo, note) {
+  $('result-icon').className = 'big-check';
+  $('result-icon').textContent = '✓';
+  $('result-message').textContent = '受付完了しました';
+  $('result-detail').innerHTML =
+    `${escapeHtml(r.name || '')} 様<br>` +
+    `${escapeHtml(r.deptName || '')} / ${escapeHtml(r.doctorName || '')}` +
+    (note ? `<br><span style="color:#f5a623;">${escapeHtml(note)}</span>` : '');
+  $('result-number').textContent = waitingNo + '番目';
+  $('scanner-area').style.display = 'none';
+  $('result-area').classList.add('active');
+  // 5秒後に自動で戻る（その間に「戻る」ボタンも出ている）
+  clearTimeout(showSuccess._tid);
+  showSuccess._tid = setTimeout(backToScan, 8000);
+}
+
+function showError(msg, detail) {
+  $('result-icon').className = 'big-error';
+  $('result-icon').textContent = '!';
+  $('result-message').textContent = msg;
+  $('result-detail').textContent = detail || '';
+  $('result-number').textContent = '-';
+  $('scanner-area').style.display = 'none';
+  $('result-area').classList.add('active');
+  clearTimeout(showError._tid);
+  showError._tid = setTimeout(backToScan, 5000);
+}
+
+function backToScan() {
+  clearTimeout(showSuccess._tid);
+  clearTimeout(showError._tid);
+  $('result-area').classList.remove('active');
+  $('scanner-area').style.display = '';
+  startScanner();
+}
+
+function escapeHtml(s) {
+  return String(s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// 初期化
+window.addEventListener('DOMContentLoaded', () => {
+  // Firebase準備 → カメラ起動
+  const waitFB = () => {
+    if (window.FB) { window.FB.ready(() => startScanner()); }
+    else setTimeout(waitFB, 200);
+  };
+  setTimeout(waitFB, 500);
+
+  // Enter キーで手入力送信
+  $('manualId').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') manualCheckin();
+  });
+});
+</script>
+</body>
+</html>

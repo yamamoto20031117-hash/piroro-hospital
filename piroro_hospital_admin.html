@@ -990,8 +990,8 @@ function renderQueue() {
       <div class="queue-item ${r.status}" onclick="openDetail('${r.id}')">
         <div class="queue-num">${i+1}</div>
         <div class="info">
-          <div class="name">${escapeHtml(r.name)} 様</div>
-          <div class="meta">${r.time}予約 / ${r.deptName} / ${r.doctorName} / <span class="status-badge status-${r.status}">${statusLabels[r.status]}</span></div>
+          <div class="name">${escapeHtml(r.name)} 様${r.walkin ? ' <span style="font-size:11px; padding:2px 8px; background:#ffb84d; color:#fff; border-radius:8px; vertical-align:middle;">直接受付</span>' : ''}</div>
+          <div class="meta">${r.walkin ? '直接受付' : r.time+'予約'} / ${r.deptName} / ${r.doctorName} / <span class="status-badge status-${r.status}">${statusLabels[r.status]}</span></div>
         </div>
         <div class="actions">${actions}</div>
       </div>
@@ -1243,7 +1243,7 @@ function openDetail(id) {
   const r = list.find(x => x.id === id);
   if (!r) return;
   const body = `
-    <div class="detail-row"><div class="k">予約番号</div><div class="v">${r.id}</div></div>
+    <div class="detail-row"><div class="k">予約番号</div><div class="v">${r.id}${r.walkin ? ' <span style="font-size:11px; padding:2px 8px; background:#ffb84d; color:#fff; border-radius:8px;">直接受付</span>' : ''}</div></div>
     <div class="detail-row"><div class="k">ステータス</div><div class="v"><span class="status-badge status-${r.status}">${statusLabels[r.status]}</span></div></div>
     <div class="detail-row"><div class="k">来院日時</div><div class="v">${formatDate(r.date)} ${r.time}</div></div>
     <div class="detail-row"><div class="k">診療科</div><div class="v">${r.deptName}</div></div>

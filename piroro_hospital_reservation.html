@@ -8,6 +8,7 @@
 <!-- 外部サービス読み込み -->
 <script src="config.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
   html, body { height: 100%; }
@@ -794,7 +795,15 @@
           予約番号
           <strong id="reserveNo">-</strong>
         </div>
-        <button class="btn" onclick="goHome()">ホームへ戻る</button>
+        <!-- QRコード -->
+        <div style="margin:24px auto; padding:20px; background:#fff; border:2px solid #e8eef4; border-radius:12px; max-width:260px;">
+          <div id="doneQr" style="display:flex; justify-content:center;"></div>
+          <div style="font-size:12px; color:#6b7b8c; margin-top:12px; text-align:center; line-height:1.5;">
+            📱 来院時はこの画面を<br>受付にお見せください
+          </div>
+        </div>
+        <button class="btn" onclick="saveQrAsImage()" style="max-width:260px; margin:0 auto 10px;">📥 画像として保存</button>
+        <button class="btn secondary" onclick="goHome()" style="max-width:260px; margin:0 auto;">ホームへ戻る</button>
       </div>
     </section>
 
@@ -1329,7 +1338,23 @@ async function completeReservation() {
     if (reservation.email && window.sendReservationEmail) {
       window.sendReservationEmail(reservation);
     }
+    // 次回来院用に患者情報をLocalStorageに保存
+    try {
+      localStorage.setItem('piroro_patient_profile', JSON.stringify({
+        name:  state.form.name,
+        kana:  state.form.kana,
+        dob:   state.form.dob,
+        tel:   state.form.tel,
+        email: reservation.email
+      }));
+    } catch(_) {}
     document.getElementById('reserveNo').textContent = no;
+    // QRコード生成（予約IDを埋め込み）
+    try {
+      const qrEl = document.getElementById('doneQr');
+      qrEl.innerHTML = '';
+      new QRCode(qrEl, { text: no, width: 220, height: 220, correctLevel: QRCode.CorrectLevel.M });
+    } catch(e) { console.warn('QR生成に失敗:', e); }
     showScreen('done');
   } catch(e) {
     console.error(e);
@@ -1337,6 +1362,38 @@ async function completeReservation() {
     confirmBtns.forEach(b => b.disabled = false);
   }
 }
+
+// 完了画面のQRを画像保存
+function saveQrAsImage() {
+  const canvas = document.querySelector('#doneQr canvas');
+  if (!canvas) { toast('QRがまだ生成されていません'); return; }
+  const url = canvas.toDataURL('image/png');
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = (document.getElementById('reserveNo').textContent || 'piroro_qr') + '.png';
+  a.click();
+}
+
+// ------ 患者プロファイル自動入力（LocalStorage） ------
+function autofillPatientProfile() {
+  try {
+    const raw = localStorage.getItem('piroro_patient_profile');
+    if (!raw) return;
+    const p = JSON.parse(raw);
+    if (!p) return;
+    const setIfEmpty = (id, v) => {
+      const el = document.getElementById(id);
+      if (el && !el.value && v) el.value = v;
+    };
+    setIfEmpty('name',  p.name);
+    setIfEmpty('kana',  p.kana);
+    setIfEmpty('dob',   p.dob);
+    setIfEmpty('tel',   p.tel);
+    setIfEmpty('email', p.email);
+  } catch(_) {}
+}
+// ページ読み込み後に自動入力
+window.addEventListener('DOMContentLoaded', () => { setTimeout(autofillPatientProfile, 200); });
 
 // ------ 予約一覧 ------
 function renderLookup() {
